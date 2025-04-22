@@ -2,25 +2,31 @@ package handlers
 
 import (
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/ahmadbasyouni10/videogpt/internal/models"
+	"github.com/ahmadbasyouni10/videogpt/pkg/ffmpeg"
+	"github.com/ahmadbasyouni10/videogpt/pkg/supabase"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"github.com/ahmadbasyouni10/videogpt/internal/models"
-	"github.com/ahmadbasyouni10/videogpt/pkg/supabase"
 )
 
 // VideoHandler handles video-related requests
 type VideoHandler struct {
-	SupabaseClient *supabase.Client
+	SupabaseClient  *supabase.Client
+	FFmpegProcessor *ffmpeg.Processor
 }
 
 // NewVideoHandler creates a new video handler
-func NewVideoHandler(supabaseClient *supabase.Client) *VideoHandler {
+func NewVideoHandler(supabaseClient *supabase.Client, ffmpegProcessor *ffmpeg.Processor) *VideoHandler {
 	return &VideoHandler{
-		SupabaseClient: supabaseClient,
+		SupabaseClient:  supabaseClient,
+		FFmpegProcessor: ffmpegProcessor,
 	}
 }
 
@@ -29,47 +35,149 @@ func (h *VideoHandler) UploadVideo(c echo.Context) error {
 	// Get form values
 	title := c.FormValue("title")
 	description := c.FormValue("description")
-	
+
 	// Get file from form
 	file, fileHeader, err := c.Request().FormFile("video")
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "No video file provided"})
 	}
 	defer file.Close()
-	
+
 	// Validate file type
 	ext := filepath.Ext(fileHeader.Filename)
 	if ext != ".mp4" && ext != ".mov" && ext != ".avi" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Unsupported file format"})
 	}
-	
+
 	// Generate unique ID for video
 	videoID := uuid.New().String()
-	
-	// Build path for storage
-	path := fmt.Sprintf("videos/%s%s", videoID, ext)
-	
-	// Upload file to Supabase
-	fileURL, err := h.SupabaseClient.UploadFile("videos", path, file, fileHeader)
+
+	// Save uploaded file to temp directory for processing
+	tempFilePath := filepath.Join(h.FFmpegProcessor.TempDir, videoID+ext)
+	tempFile, err := os.Create(tempFilePath)
 	if err != nil {
-		// Print detailed error for debugging
-		fmt.Printf("Supabase error: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to save uploaded file"})
+	}
+
+	// Copy uploaded file to temp file
+	_, err = io.Copy(tempFile, file)
+	tempFile.Close()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to save uploaded file"})
+	}
+
+	// Generate thumbnail
+	thumbnailPath, err := h.FFmpegProcessor.CreateThumbnail(tempFilePath)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create thumbnail"})
+	}
+
+	// Get video duration
+	duration, err := h.FFmpegProcessor.GetVideoDuration(tempFilePath)
+	if err != nil {
+		// Non-fatal error, continue without duration
+		fmt.Printf("Failed to get video duration: %v\n", err)
+	}
+
+	// Build path for storage
+	videoPath := fmt.Sprintf("videos/%s%s", videoID, ext)
+	thumbnailStoragePath := fmt.Sprintf("thumbnails/%s.jpg", videoID)
+
+	// Upload video file to Supabase
+	// bucket, path in supabase, and then where to find the file
+	videoURL, err := h.SupabaseClient.UploadFileFromPath("videos", videoPath, tempFilePath)
+	if err != nil {
+		fmt.Printf("Supabase video upload error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to upload video"})
 	}
-	
+
+	// Upload thumbnail to Supabase
+	thumbnailFile, err := os.Open(thumbnailPath)
+	if err != nil {
+		fmt.Printf("Failed to open thumbnail file: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to process thumbnail"})
+	}
+	defer thumbnailFile.Close()
+
+	thumbnailFileInfo, err := thumbnailFile.Stat()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get thumbnail file info"})
+	}
+
+	thumbnailHeader := &multipart.FileHeader{
+		Filename: filepath.Base(thumbnailPath),
+		Size:     thumbnailFileInfo.Size(),
+		Header:   make(map[string][]string),
+	}
+	thumbnailHeader.Header.Set("Content-Type", "image/jpeg")
+
+	thumbnailURL, err := h.SupabaseClient.UploadFile("thumbnails", thumbnailStoragePath, thumbnailFile, thumbnailHeader)
+	if err != nil {
+		fmt.Printf("Supabase thumbnail upload error: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to upload thumbnail"})
+	}
+
 	// Create video object
 	video := models.Video{
-		ID:          videoID,
-		Title:       title,
-		Description: description,
-		FilePath:    path,
-		UploadedAt:  time.Now(),
-		Status:      "pending",
-		ThumbnailURL: fileURL,
+		ID:           videoID,
+		Title:        title,
+		Description:  description,
+		FilePath:     videoPath,
+		UploadedAt:   time.Now(),
+		Status:       "processing",
+		ThumbnailURL: thumbnailURL,
+		Duration:     duration,
+		VideoURL:     videoURL,
 	}
-	
-	// Here you would normally save the video to the database
+
+	// Clean up temp files
+	defer func() {
+		os.Remove(tempFilePath)
+		os.Remove(thumbnailPath)
+	}()
+
+	// Here you would save the video to the database
 	// For now, we'll just return the video object
-	
+
 	return c.JSON(http.StatusCreated, video)
-} 
+}
+
+func (h *VideoHandler) GetThumbnail(c echo.Context) error {
+	thumbnailID := c.Param("id")
+	if thumbnailID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Thumbnail ID is required"})
+	}
+
+	thumbnailPath := fmt.Sprintf("%s.jpg", thumbnailID)
+	thumbNailData, err := h.SupabaseClient.GetFile("thumbnails", thumbnailPath)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get thumbnail"})
+	}
+
+	return c.Blob(http.StatusOK, "image/jpeg", thumbNailData)
+
+}
+
+// GetVideo retrieves video details
+func (h *VideoHandler) GetVideo(c echo.Context) error {
+	videoID := c.Param("id")
+	if videoID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Video ID is required"})
+	}
+
+	// Use GetFile to retrieve the video data
+	// We need to use the same path format that was used during upload
+	// From the upload code, we see videoPath is set to: fmt.Sprintf("videos/%s%s", videoID, ext)
+	// But we don't know the extension, so we'll try mp4 since that's what we see in Supabase
+	videoPath := fmt.Sprintf("%s.mp4", videoID)
+	fmt.Printf("DEBUG - Fetching video: %s\n", videoPath) // Add debug output
+
+	videoData, err := h.SupabaseClient.GetFile("videos", videoPath)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "Video not found", "details": err.Error()})
+	}
+
+	// Serve the video data directly
+	// change later to make it redirect or stream the video
+	return c.Blob(http.StatusOK, "video/mp4", videoData)
+}

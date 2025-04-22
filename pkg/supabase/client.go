@@ -25,6 +25,7 @@ func NewClient() *Client {
 }
 
 // UploadFile uploads a file to Supabase storage
+// tested good
 func (c *Client) UploadFile(bucket string, path string, file multipart.File, fileHeader *multipart.FileHeader) (string, error) {
 	// Read file content
 	fileBytes, err := io.ReadAll(file)
@@ -64,6 +65,7 @@ func (c *Client) UploadFile(bucket string, path string, file multipart.File, fil
 }
 
 // UploadFileFromPath uploads a file to Supabase storage from a local file path
+// TESTED and is good
 func (c *Client) UploadFileFromPath(bucket string, path string, filePath string) (string, error) {
 	// Open the file
 	file, err := os.Open(filePath)
@@ -103,8 +105,9 @@ func (c *Client) UploadFileFromPath(bucket string, path string, filePath string)
 
 // GetFile retrieves a file from Supabase storage
 func (c *Client) GetFile(bucket string, path string) ([]byte, error) {
-	// Create request
-	url := fmt.Sprintf("%s/storage/v1/object/public/%s/%s", c.URL, bucket, path)
+	// Create request - matching the format used in UploadFile
+	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", c.URL, bucket, path)
+	fmt.Printf("DEBUG - Fetching from URL: %s\n", url) // Add debug output
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
