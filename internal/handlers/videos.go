@@ -80,8 +80,8 @@ func (h *VideoHandler) UploadVideo(c echo.Context) error {
 	}
 
 	// Build path for storage
-	videoPath := fmt.Sprintf("videos/%s%s", videoID, ext)
-	thumbnailStoragePath := fmt.Sprintf("thumbnails/%s.jpg", videoID)
+	videoPath := fmt.Sprintf("%s%s", videoID, ext)
+	thumbnailStoragePath := fmt.Sprintf("%s.jpg", videoID)
 
 	// Upload video file to Supabase
 	// bucket, path in supabase, and then where to find the file
@@ -90,6 +90,7 @@ func (h *VideoHandler) UploadVideo(c echo.Context) error {
 		fmt.Printf("Supabase video upload error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to upload video"})
 	}
+	fmt.Printf("DEBUG - Uploaded video URL: %s\n", videoURL)
 
 	// Upload thumbnail to Supabase
 	thumbnailFile, err := os.Open(thumbnailPath)
@@ -116,6 +117,7 @@ func (h *VideoHandler) UploadVideo(c echo.Context) error {
 		fmt.Printf("Supabase thumbnail upload error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to upload thumbnail"})
 	}
+	fmt.Printf("DEBUG - Uploaded thumbnail URL: %s\n", thumbnailURL)
 
 	// Create video object
 	video := models.Video{
@@ -148,14 +150,12 @@ func (h *VideoHandler) GetThumbnail(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Thumbnail ID is required"})
 	}
 
-	thumbnailPath := fmt.Sprintf("%s.jpg", thumbnailID)
-	thumbNailData, err := h.SupabaseClient.GetFile("thumbnails", thumbnailPath)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to get thumbnail"})
-	}
+	// Match the exact URL pattern returned by the updated upload function
+	thumbnailURL := fmt.Sprintf("%s/storage/v1/object/public/thumbnails/%s.jpg",
+		h.SupabaseClient.URL, thumbnailID)
 
-	return c.Blob(http.StatusOK, "image/jpeg", thumbNailData)
-
+	fmt.Printf("DEBUG - Redirecting to thumbnail URL: %s\n", thumbnailURL)
+	return c.Redirect(http.StatusTemporaryRedirect, thumbnailURL)
 }
 
 // GetVideo retrieves video details
@@ -165,19 +165,10 @@ func (h *VideoHandler) GetVideo(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Video ID is required"})
 	}
 
-	// Use GetFile to retrieve the video data
-	// We need to use the same path format that was used during upload
-	// From the upload code, we see videoPath is set to: fmt.Sprintf("videos/%s%s", videoID, ext)
-	// But we don't know the extension, so we'll try mp4 since that's what we see in Supabase
-	videoPath := fmt.Sprintf("%s.mp4", videoID)
-	fmt.Printf("DEBUG - Fetching video: %s\n", videoPath) // Add debug output
+	// Match the exact URL pattern returned by the updated upload function
+	videoURL := fmt.Sprintf("%s/storage/v1/object/public/videos/%s.mp4",
+		h.SupabaseClient.URL, videoID)
 
-	videoData, err := h.SupabaseClient.GetFile("videos", videoPath)
-	if err != nil {
-		return c.JSON(http.StatusNotFound, map[string]string{"error": "Video not found", "details": err.Error()})
-	}
-
-	// Serve the video data directly
-	// change later to make it redirect or stream the video
-	return c.Blob(http.StatusOK, "video/mp4", videoData)
+	fmt.Printf("DEBUG - Redirecting to video URL: %s\n", videoURL)
+	return c.Redirect(http.StatusTemporaryRedirect, videoURL)
 }

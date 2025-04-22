@@ -104,6 +104,7 @@ func (c *Client) UploadFileFromPath(bucket string, path string, filePath string)
 }
 
 // GetFile retrieves a file from Supabase storage
+
 func (c *Client) GetFile(bucket string, path string) ([]byte, error) {
 	// Create request - matching the format used in UploadFile
 	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", c.URL, bucket, path)
