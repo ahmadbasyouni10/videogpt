@@ -16,6 +16,7 @@ type Processor struct {
 func NewProcessor(tempDir string) (*Processor, error) {
 	// get info about temp directory
 	// if statement for checking if os.isNotExist then create it if not made
+	// os.isnotexist(err) to check if error is a not exist error
 	if _, err := os.Stat(tempDir); os.IsNotExist(err) {
 		// mkdir expects a path and a mode (0755 default means that everyone can read/execute but owner is only one with write)
 		err := os.MkdirAll(tempDir, 0755)
@@ -90,4 +91,30 @@ func (p *Processor) CreateThumbnail(videoPath string) (string, error) {
 	}
 
 	return thumbnailPath, nil
+}
+
+func (p *Processor) GetVideoDuration(videoPath string) (float64, error) {
+	cmd := exec.Command(
+		"ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		videoPath,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get video duration: %w", err)
+	}
+
+	var duration float64
+	// Sscanf is for scanning the string and returning the number of items successfully parsed
+	// %f is for float
+	// &duration (address of duration)is for the variable to store the result
+	_, err = fmt.Sscanf(string(output), "%f", &duration)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse video duration: %w", err)
+	}
+
+	return duration, nil
 }
