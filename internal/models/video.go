@@ -16,4 +16,6 @@ type Video struct {
 	ProcessedAt  time.Time `json:"processed_at,omitempty"`
 	Status       string    `json:"status"` // pending, processing, completed, failed
 	ThumbnailURL string    `json:"thumbnail_url,omitempty"`
-} 
+	Duration     float64   `json:"duration,omitempty"`
+	VideoURL     string    `json:"video_url,omitempty"`
+}
