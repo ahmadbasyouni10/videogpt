@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 // Client represents a Supabase client
@@ -62,6 +63,44 @@ func (c *Client) UploadFile(bucket string, path string, file multipart.File, fil
 	return fileURL, nil
 }
 
+// UploadFileFromPath uploads a file to Supabase storage from a local file path
+func (c *Client) UploadFileFromPath(bucket string, path string, filePath string) (string, error) {
+	// Open the file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("error opening file: %w", err)
+	}
+	defer file.Close()
+
+	// Get file info
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("error getting file info: %w", err)
+	}
+
+	// Create file header
+	fileHeader := &multipart.FileHeader{
+		Filename: filepath.Base(filePath),
+		Size:     fileInfo.Size(),
+		Header:   make(map[string][]string),
+	}
+
+	// Set content type based on file extension
+	contentType := "application/octet-stream"
+	ext := filepath.Ext(filePath)
+	if ext == ".mp4" {
+		contentType = "video/mp4"
+	} else if ext == ".mov" {
+		contentType = "video/quicktime"
+	} else if ext == ".avi" {
+		contentType = "video/x-msvideo"
+	}
+	fileHeader.Header.Set("Content-Type", contentType)
+
+	// Use the existing UploadFile method
+	return c.UploadFile(bucket, path, file, fileHeader)
+}
+
 // GetFile retrieves a file from Supabase storage
 func (c *Client) GetFile(bucket string, path string) ([]byte, error) {
 	// Create request
@@ -89,4 +128,4 @@ func (c *Client) GetFile(bucket string, path string) ([]byte, error) {
 
 	// Read and return the file content
 	return io.ReadAll(resp.Body)
-} 
+}
