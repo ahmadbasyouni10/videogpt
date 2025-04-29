@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // this processor will process with ffmpeg and the temp directory will be used to store the video and audio files
@@ -48,24 +49,65 @@ func (p *Processor) ExtractAudio(videoPath string) (string, error) {
 	fileNameWithoutExt := fileName[:len(fileName)-len(filepath.Ext(fileName))]
 	audioPath := filepath.Join(p.TempDir, fileNameWithoutExt+".mp3")
 
-	// define ffmpeg command to extract audio
-	// -q:a 0 is for quality 0 (highest)
-	// -map a is for mapping audio stream
-	// audioPath is the path to save the audio file
-	// exec.Command is for running the command
-
-	cmd := exec.Command(
-		"ffmpeg",
-		"-i", videoPath,
-		"-q:a", "0",
-		"-map", "a",
-		audioPath,
+	// First check if the video has audio streams
+	hasAudioCmd := exec.Command(
+		"ffprobe",
+		"-v", "error",
+		"-select_streams", "a",
+		"-show_entries", "stream=codec_type",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		videoPath,
 	)
 
-	// run ffmpeg command
-	output, err := cmd.CombinedOutput()
+	output, _ := hasAudioCmd.Output()
+	hasAudio := strings.TrimSpace(string(output)) == "audio"
+
+	var cmd *exec.Cmd
+
+	if hasAudio {
+		// If the video has audio, extract it normally
+		cmd = exec.Command(
+			"ffmpeg",
+			"-i", videoPath,
+			"-vn",            // No video
+			"-acodec", "mp3", // Force mp3 codec
+			"-y", // Overwrite output files
+			audioPath,
+		)
+	} else {
+		// If no audio, create a silent audio track with same duration as the video
+		// First get the duration
+		durationCmd := exec.Command(
+			"ffprobe",
+			"-v", "error",
+			"-show_entries", "format=duration",
+			"-of", "default=noprint_wrappers=1:nokey=1",
+			videoPath,
+		)
+
+		durationOutput, err := durationCmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get video duration: %w", err)
+		}
+
+		duration := strings.TrimSpace(string(durationOutput))
+
+		// Create silent audio
+		cmd = exec.Command(
+			"ffmpeg",
+			"-f", "lavfi", // Use libavfilter
+			"-i", "anullsrc=r=44100:cl=stereo", // Generate silent audio
+			"-t", duration, // Same duration as video
+			"-acodec", "mp3", // MP3 codec
+			"-y", // Overwrite output
+			audioPath,
+		)
+	}
+
+	// Run the command
+	cmdOutput, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to extract audio: %s - %w", string(output), err)
+		return "", fmt.Errorf("failed to extract audio: %s - %w", string(cmdOutput), err)
 	}
 
 	return audioPath, nil
