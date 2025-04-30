@@ -8,6 +8,7 @@ import (
 	"github.com/ahmadbasyouni10/videogpt/internal/handlers"
 	"github.com/ahmadbasyouni10/videogpt/pkg/ffmpeg"
 	"github.com/ahmadbasyouni10/videogpt/pkg/supabase"
+	"github.com/ahmadbasyouni10/videogpt/pkg/transcription"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -35,8 +36,15 @@ func main() {
 		log.Fatalf("Failed to initialize FFmpeg processor: %v", err)
 	}
 
+	// Initialize transcription service
+	openaiApiKey := os.Getenv("OPENAI_API_KEY")
+	if openaiApiKey == "" {
+		log.Println("Warning: OPENAI_API_KEY not set, transcription service will not work")
+	}
+	transcriptionService := transcription.NewWhisperService(openaiApiKey)
+
 	// Initialize handlers
-	videoHandler := handlers.NewVideoHandler(supabaseClient, ffmpegProcessor)
+	videoHandler := handlers.NewVideoHandler(supabaseClient, ffmpegProcessor, transcriptionService)
 
 	// Initialize Echo instance
 	e := echo.New()
@@ -59,6 +67,9 @@ func main() {
 
 	// Add route to get thumbnail
 	e.GET("/thumbnails/:id", videoHandler.GetThumbnail)
+
+	// Add route to generate transcript
+	e.POST("/videos/:id/transcript", videoHandler.GenerateTranscript)
 
 	// Start server
 	port := os.Getenv("PORT")

@@ -12,21 +12,24 @@ import (
 	"github.com/ahmadbasyouni10/videogpt/internal/models"
 	"github.com/ahmadbasyouni10/videogpt/pkg/ffmpeg"
 	"github.com/ahmadbasyouni10/videogpt/pkg/supabase"
+	"github.com/ahmadbasyouni10/videogpt/pkg/transcription"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
 // VideoHandler handles video-related requests
 type VideoHandler struct {
-	SupabaseClient  *supabase.Client
-	FFmpegProcessor *ffmpeg.Processor
+	SupabaseClient       *supabase.Client
+	FFmpegProcessor      *ffmpeg.Processor
+	TranscriptionService transcription.Service
 }
 
 // NewVideoHandler creates a new video handler
-func NewVideoHandler(supabaseClient *supabase.Client, ffmpegProcessor *ffmpeg.Processor) *VideoHandler {
+func NewVideoHandler(supabaseClient *supabase.Client, ffmpegProcessor *ffmpeg.Processor, transcriptionService transcription.Service) *VideoHandler {
 	return &VideoHandler{
-		SupabaseClient:  supabaseClient,
-		FFmpegProcessor: ffmpegProcessor,
+		SupabaseClient:       supabaseClient,
+		FFmpegProcessor:      ffmpegProcessor,
+		TranscriptionService: transcriptionService,
 	}
 }
 
@@ -171,4 +174,80 @@ func (h *VideoHandler) GetVideo(c echo.Context) error {
 
 	fmt.Printf("DEBUG - Redirecting to video URL: %s\n", videoURL)
 	return c.Redirect(http.StatusTemporaryRedirect, videoURL)
+}
+
+// GenerateTranscript generates a transcript for a video
+func (h *VideoHandler) GenerateTranscript(c echo.Context) error {
+	videoID := c.Param("id")
+	if videoID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Video ID is required"})
+	}
+
+	// Get direct URL to the video in Supabase using the same pattern as in GetVideo
+	videoURL := fmt.Sprintf("%s/storage/v1/object/public/videos/%s.mp4",
+		h.SupabaseClient.URL, videoID)
+
+	// Download the video from the URL
+	resp, err := http.Get(videoURL)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to download video",
+			"details": err.Error(),
+		})
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error":   "Video not found",
+			"details": fmt.Sprintf("Status code: %d", resp.StatusCode),
+		})
+	}
+
+	// Save to temp file for processing
+	tempFilePath := filepath.Join(h.FFmpegProcessor.TempDir, videoID+".mp4")
+	tempFile, err := os.Create(tempFilePath)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to create temp file",
+		})
+	}
+
+	// Copy the response body to the temp file
+	_, err = io.Copy(tempFile, resp.Body)
+	tempFile.Close()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to save video data",
+		})
+	}
+	defer os.Remove(tempFilePath) // Clean up when done
+
+	// Extract audio using your existing FFmpeg processor
+	audioPath, err := h.FFmpegProcessor.ExtractAudio(tempFilePath)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to extract audio",
+			"details": err.Error(),
+		})
+	}
+	defer os.Remove(audioPath) // Clean up audio file when done
+
+	// Use the transcription service to convert audio to text
+	transcript, err := h.TranscriptionService.TranscribeAudio(audioPath)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to transcribe audio",
+			"details": err.Error(),
+		})
+	}
+
+	// TODO: Save transcript to database if needed
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"status":     "success",
+		"message":    "Audio transcribed successfully",
+		"video_id":   videoID,
+		"transcript": transcript,
+	})
 }
