@@ -102,34 +102,3 @@ func (c *Client) UploadFileFromPath(bucket string, path string, filePath string)
 	// Use the existing UploadFile method
 	return c.UploadFile(bucket, path, file, fileHeader)
 }
-
-// GetFile retrieves a file from Supabase storage
-
-func (c *Client) GetFile(bucket string, path string) ([]byte, error) {
-	// Create request - matching the format used in UploadFile
-	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", c.URL, bucket, path)
-	fmt.Printf("DEBUG - Fetching from URL: %s\n", url) // Add debug output
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	// Set headers
-	req.Header.Set("Authorization", "Bearer "+c.Key)
-
-	// Send request
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving file: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("error retrieving file: status code %d", resp.StatusCode)
-	}
-
-	// Read and return the file content
-	return io.ReadAll(resp.Body)
-}

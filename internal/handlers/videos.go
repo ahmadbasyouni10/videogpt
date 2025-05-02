@@ -11,6 +11,7 @@ import (
 
 	"github.com/ahmadbasyouni10/videogpt/internal/models"
 	"github.com/ahmadbasyouni10/videogpt/pkg/ffmpeg"
+	"github.com/ahmadbasyouni10/videogpt/pkg/summarization"
 	"github.com/ahmadbasyouni10/videogpt/pkg/supabase"
 	"github.com/ahmadbasyouni10/videogpt/pkg/transcription"
 	"github.com/google/uuid"
@@ -22,14 +23,16 @@ type VideoHandler struct {
 	SupabaseClient       *supabase.Client
 	FFmpegProcessor      *ffmpeg.Processor
 	TranscriptionService transcription.Service
+	SummarizationService summarization.Service
 }
 
 // NewVideoHandler creates a new video handler
-func NewVideoHandler(supabaseClient *supabase.Client, ffmpegProcessor *ffmpeg.Processor, transcriptionService transcription.Service) *VideoHandler {
+func NewVideoHandler(supabaseClient *supabase.Client, ffmpegProcessor *ffmpeg.Processor, transcriptionService transcription.Service, summarizationService summarization.Service) *VideoHandler {
 	return &VideoHandler{
 		SupabaseClient:       supabaseClient,
 		FFmpegProcessor:      ffmpegProcessor,
 		TranscriptionService: transcriptionService,
+		SummarizationService: summarizationService,
 	}
 }
 
@@ -249,5 +252,35 @@ func (h *VideoHandler) GenerateTranscript(c echo.Context) error {
 		"message":    "Audio transcribed successfully",
 		"video_id":   videoID,
 		"transcript": transcript,
+	})
+}
+
+// GenerateSummary generates a summary for a video based on its transcript
+func (h *VideoHandler) GenerateSummary(c echo.Context) error {
+	videoID := c.Param("id")
+	if videoID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Video ID is required"})
+	}
+
+	// Get the transcript from the request
+	transcript := c.FormValue("transcript")
+	if transcript == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Transcript is required"})
+	}
+
+	// Now that we have the transcript, generate a summary
+	summary, err := h.SummarizationService.SummarizeText(transcript)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to generate summary",
+			"details": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"status":   "success",
+		"message":  "Summary generated successfully",
+		"video_id": videoID,
+		"summary":  summary,
 	})
 }

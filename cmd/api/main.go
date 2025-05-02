@@ -7,6 +7,7 @@ import (
 
 	"github.com/ahmadbasyouni10/videogpt/internal/handlers"
 	"github.com/ahmadbasyouni10/videogpt/pkg/ffmpeg"
+	"github.com/ahmadbasyouni10/videogpt/pkg/summarization"
 	"github.com/ahmadbasyouni10/videogpt/pkg/supabase"
 	"github.com/ahmadbasyouni10/videogpt/pkg/transcription"
 	"github.com/joho/godotenv"
@@ -39,12 +40,15 @@ func main() {
 	// Initialize transcription service
 	openaiApiKey := os.Getenv("OPENAI_API_KEY")
 	if openaiApiKey == "" {
-		log.Println("Warning: OPENAI_API_KEY not set, transcription service will not work")
+		log.Println("Warning: OPENAI_API_KEY not set, transcription and summarization services will not work")
 	}
 	transcriptionService := transcription.NewWhisperService(openaiApiKey)
 
+	// Initialize summarization service (using the same OpenAI API key)
+	summarizationService := summarization.NewOpenAIService(openaiApiKey)
+
 	// Initialize handlers
-	videoHandler := handlers.NewVideoHandler(supabaseClient, ffmpegProcessor, transcriptionService)
+	videoHandler := handlers.NewVideoHandler(supabaseClient, ffmpegProcessor, transcriptionService, summarizationService)
 
 	// Initialize Echo instance
 	e := echo.New()
@@ -54,22 +58,30 @@ func main() {
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORS())
 
-	// Define routes
-	e.GET("/", func(c echo.Context) error {
+	// Serve static files from the static directory
+	e.Static("/", "static")
+
+	// Define API routes
+	api := e.Group("/api")
+
+	api.GET("/", func(c echo.Context) error {
 		return c.String(200, "Welcome to VideoGPT API")
 	})
 
 	// Video routes
-	e.POST("/videos", videoHandler.UploadVideo)
+	api.POST("/videos", videoHandler.UploadVideo)
 
 	// Add route to get video details
-	e.GET("/videos/:id", videoHandler.GetVideo)
+	api.GET("/videos/:id", videoHandler.GetVideo)
 
 	// Add route to get thumbnail
-	e.GET("/thumbnails/:id", videoHandler.GetThumbnail)
+	api.GET("/thumbnails/:id", videoHandler.GetThumbnail)
 
 	// Add route to generate transcript
-	e.POST("/videos/:id/transcript", videoHandler.GenerateTranscript)
+	api.POST("/videos/:id/transcript", videoHandler.GenerateTranscript)
+
+	// Add route to generate summary
+	api.POST("/videos/:id/summary", videoHandler.GenerateSummary)
 
 	// Start server
 	port := os.Getenv("PORT")
